@@ -6,9 +6,7 @@
 #include <cstdint>
 #include <array>
 #include <algorithm>
-#include <stack>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 
 int main(int argc, const char *argv[]) {
@@ -16,10 +14,7 @@ int main(int argc, const char *argv[]) {
 
   std::random_device rd;
   std::mt19937 engine{rd()};
-
-  using int_distrib_t = std::uniform_int_distribution<int>;
-  using interval = int_distrib_t::param_type;
-  int_distrib_t rand;
+  std::uniform_int_distribution<int> rand(0, 0xFF);
 
   using namespace std::this_thread;
   using namespace std::chrono_literals;
@@ -36,7 +31,7 @@ int main(int argc, const char *argv[]) {
   const bool white = true;
   const bool black = false;
 
-  constexpr byte font[]{
+  constexpr std::array font{
       0xF0, 0x90, 0x90, 0x90, 0xF0, 0x20, 0x60, 0x20, 0x20, 0x70, 0xF0, 0x10,
       0xF0, 0x80, 0xF0, 0xF0, 0x10, 0xF0, 0x10, 0xF0, 0x90, 0x90, 0xF0, 0x10,
       0x10, 0xF0, 0x80, 0xF0, 0x10, 0xF0, 0xF0, 0x80, 0xF0, 0x90, 0xF0, 0xF0,
@@ -46,20 +41,24 @@ int main(int argc, const char *argv[]) {
       0xF0, 0x80, 0xF0, 0xF0, 0x80, 0xF0, 0x80, 0x80};
 
   std::array<byte, 4 * 1024> ram{};
-  std::copy(std::begin(font), std::end(font), std::begin(ram));
+  std::copy(cbegin(font), cend(font), begin(ram));
 
   constexpr u16 start_address = 0x200;
   std::ifstream fin{argv[1]};
-  std::copy(std::istreambuf_iterator(fin), {}, std::begin(ram) + start_address);
+  std::copy(std::istreambuf_iterator(fin), {}, ram.begin() + start_address);
 
   u16 PC{start_address};
   u16 I{};
 
-  using screenline = std::array<bool, 64>;
-  using screen_t = std::array<screenline, 32>;
-  screen_t screen{};
+  std::array<u16, 16> stack;
+  u16 SP = stack.size() -1;
 
-  std::stack<u16> stack;
+  constexpr u8 screen_width = 64;
+  constexpr u8 screen_height = 32;
+
+  using screenline = std::array<bool, screen_width>;
+  using screen_t = std::array<screenline, screen_height>;
+  screen_t screen{};
 
   u8 delay_timer{};
   u8 sound_timer{};
@@ -85,12 +84,12 @@ int main(int argc, const char *argv[]) {
       case 0x0:
         switch (op & 0x00ff) {
           case 0xe0: { for (auto &line : screen) line.fill(black); frame_changed = true; } break;
-          case 0xee: PC = stack.top(); stack.pop(); break;
+          case 0xee: PC = stack[SP++]; break;
         }
         break;
 
       case 0x1: PC = nnn; PC -= 2; break;
-      case 0x2: stack.push(PC); PC = nnn; PC -= 2; break;
+      case 0x2: stack[--SP] = PC; PC = nnn; PC -= 2; break;
       case 0x3: if (VX[x] == nn) { PC += 2; } break;
       case 0x4: if (VX[x] != nn) { PC += 2; } break;
       case 0x5: if (VX[x] == VX[y]) { PC += 2; } break;
@@ -113,21 +112,21 @@ int main(int argc, const char *argv[]) {
       case 0x9: if (VX[x] != VX[y]) { PC += 2; } break;
       case 0xa: I = nnn; break;
       case 0xb: if (jump) { PC = VX[0] + nnn; } else { PC = VX[x] + nn; } PC -= 2; break;
-      case 0xc: VX[x] = nn & rand(engine, interval{0, 0xff}); break;
+      case 0xc: VX[x] = nn & rand(engine); break;
       case 0xd: {
-        const u8 X = VX[x] % 64;
-        const u8 Y = VX[y] % 32;
+        const u8 X = VX[x] % screen_width;
+        const u8 Y = VX[y] % screen_height;
         const u8 N = n;
 
         VF = 0;
         for (std::size_t row = 0; row < N; ++row) {
-          if (Y + row > 31) break;
+          if (Y + row > screen_height - 1) break;
 
           const byte tile_line_on_memory = ram[I + row];
           if (tile_line_on_memory == 0) continue;
 
           for (std::size_t column = 0; column < 8; ++column) {
-            if (X + column > 63) break;
+            if (X + column > screen_width - 1) break;
 
             bool &tile_pixel_on_screen = screen[Y + row][X + column];
 
@@ -149,7 +148,6 @@ int main(int argc, const char *argv[]) {
           case 0x9e: if (keypad[VX[x]]) { PC += 2; } break;
           case 0xa1: if (!keypad[VX[x]]) { PC += 2; } break;
         }
-
         break;
 
       case 0xf:
@@ -165,7 +163,6 @@ int main(int argc, const char *argv[]) {
           case 0x55: std::copy_n(begin(VX), x + 1, begin(ram) + I); if (load_store) { I += (x + 1); } break;
           case 0x65: std::copy_n(begin(ram) + I, x + 1, begin(VX)); if (load_store) { I += (x + 1); } break;
         }
-
         break;
     }
     PC += 2;
